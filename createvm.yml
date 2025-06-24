@@ -23,6 +23,7 @@
             name: "{{ vm_name }}"
             namespace: "{{ namespace }}"
           spec:
+            evictionStrategy: None
             running: true
             template:
               metadata:
