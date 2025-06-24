@@ -23,13 +23,13 @@
             name: "{{ vm_name }}"
             namespace: "{{ namespace }}"
           spec:
-            evictionStrategy: None
             running: true
             template:
               metadata:
                 labels:
                   kubevirt.io/domain: "{{ vm_name }}"
               spec:
+                evictionStrategy: None
                 domain:
                   cpu:
                     cores: "{{ cpu_cores }}"
