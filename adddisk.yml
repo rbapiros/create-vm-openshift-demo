@@ -10,7 +10,7 @@
     vm_name: fedora-vm
     disk_name: extra-disk
     disk_size: 10Gi
-    storage_class: standard
+    storage_class: ocs-storagecluster-ceph-rbd-virtualization
     bus: virtio
     access_mode: ReadWriteOnce
     volume_mode: Filesystem
