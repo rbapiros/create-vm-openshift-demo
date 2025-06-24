@@ -1,0 +1,57 @@
+---
+- name: Create Linux VM on OpenShift Virtualization
+  hosts: localhost
+  gather_facts: no
+  collections:
+    - kubernetes.core
+
+  vars:
+    namespace: linux-vm
+    vm_name: fedora-vm
+    image_url: "quay.io/containerdisks/fedora:latest"  # or your preferred image
+    memory: "2Gi"
+    cpu_cores: 2
+
+  tasks:
+    - name: Deploy Linux VM in existing namespace
+      k8s:
+        state: present
+        definition:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: "{{ vm_name }}"
+            namespace: "{{ namespace }}"
+          spec:
+            running: true
+            template:
+              metadata:
+                labels:
+                  kubevirt.io/domain: "{{ vm_name }}"
+              spec:
+                domain:
+                  cpu:
+                    cores: "{{ cpu_cores }}"
+                  devices:
+                    disks:
+                      - name: containerdisk
+                        disk:
+                          bus: virtio
+                      - name: cloudinitdisk
+                        disk:
+                          bus: virtio
+                  resources:
+                    requests:
+                      memory: "{{ memory }}"
+                volumes:
+                  - name: containerdisk
+                    containerDisk:
+                      image: "{{ image_url }}"
+                  - name: cloudinitdisk
+                    cloudInitNoCloud:
+                      userData: |
+                        #cloud-config
+                        user: fedora
+                        password: fedora
+                        chpasswd: { expire: False }
+                        ssh_pwauth: True
