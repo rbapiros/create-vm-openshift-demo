@@ -207,6 +207,20 @@
               }, recursive=True)
           }}
 
+    - name: Re-fetch latest VM definition to avoid resourceVersion conflict
+      k8s_info:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ namespace }}"
+      register: refreshed_vm
+      failed_when: false
+
+    - name: Update resourceVersion in final_vm_def
+      set_fact:
+        final_vm_def: "{{ final_vm_def | combine({'metadata': {'resourceVersion': refreshed_vm.resources[0].metadata.resourceVersion}}, recursive=True) }}"
+
+    
     - name: Apply updated VM definition
       k8s:
         state: present
