@@ -6,7 +6,7 @@ This repository contains an Ansible playbook to **create or update** a Virtual M
 
 ## Main Playbooks
 
-- The main playbook files are create_vm.yml and update_vm_resources_and_add_disk.yml
+- The main playbook files are create_vm.yml[`create_vm.yml`](./create_vm.yml) and [`update_vm_resources_and_add_disk.yml`](./update_vm_resources_and_add_disk.yml)
 - create_vm.yml handles:
   - Creating a VM with specified CPU, memory, and disk settings.
 - update_vm_resources_and_add_disk.yml handles:
