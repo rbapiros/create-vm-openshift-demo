@@ -1,4 +1,4 @@
-# Fedora VM Creation and Update Playbook for OpenShift Virtualization
+# Fedora VM Creation and Update Playbook Demo
 
 This repository contains an Ansible playbook to **create or update** a Fedora Virtual Machine (VM) on OpenShift Virtualization using KubeVirt.
 
