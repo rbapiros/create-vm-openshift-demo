@@ -9,8 +9,8 @@
     namespace: linux-vm
     vm_name: fedora-vm
     image_url: "quay.io/containerdisks/fedora:latest"
-    memory: "2Gi"
-    cpu_cores: 2
+    memory: "4Gi"
+    cpu_cores: 4
 
     disk_name: extra-disk
     disk_size: 10Gi
