@@ -1,5 +1,5 @@
 ---
-- name: Create Fedora VM and attach an extra disk on OpenShift Virtualization
+- name: Create or update Fedora VM with extra disk on OpenShift Virtualization
   hosts: localhost
   gather_facts: no
   collections:
@@ -20,11 +20,18 @@
     volume_mode: Filesystem
 
   tasks:
+    - name: Check if the VM already exists
+      k8s_info:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ namespace }}"
+      register: existing_vm
+      failed_when: false
 
-    - name: Deploy Linux VM in existing namespace
-      k8s:
-        state: present
-        definition:
+    - name: Create base VM definition
+      set_fact:
+        base_vm_def:
           apiVersion: kubevirt.io/v1
           kind: VirtualMachine
           metadata:
@@ -41,6 +48,9 @@
                 domain:
                   cpu:
                     cores: "{{ cpu_cores }}"
+                  resources:
+                    requests:
+                      memory: "{{ memory }}"
                   devices:
                     disks:
                       - name: containerdisk
@@ -49,9 +59,6 @@
                       - name: cloudinitdisk
                         disk:
                           bus: virtio
-                  resources:
-                    requests:
-                      memory: "{{ memory }}"
                 volumes:
                   - name: containerdisk
                     containerDisk:
@@ -65,7 +72,8 @@
                         chpasswd: { expire: False }
                         ssh_pwauth: True
 
-    - name: Stop the VM before modifying disks
+    - name: Stop the VM before modifying
+      when: existing_vm.resources | length > 0
       k8s:
         api_version: kubevirt.io/v1
         kind: VirtualMachine
@@ -76,6 +84,7 @@
             running: false
 
     - name: Wait for VM to fully stop
+      when: existing_vm.resources | length > 0
       k8s_info:
         api_version: kubevirt.io/v1
         kind: VirtualMachineInstance
@@ -87,14 +96,6 @@
       delay: 5
       ignore_errors: true
 
-    - name: Get current VM definition
-      k8s_info:
-        api_version: kubevirt.io/v1
-        kind: VirtualMachine
-        name: "{{ vm_name }}"
-        namespace: "{{ namespace }}"
-      register: vm_info
-
     - name: Check if DataVolume exists
       k8s_info:
         api_version: cdi.kubevirt.io/v1beta1
@@ -105,6 +106,7 @@
       failed_when: false
 
     - name: Create new DataVolume if not present
+      when: dv_check.resources | length == 0
       k8s:
         state: present
         definition:
@@ -124,49 +126,69 @@
               storageClassName: "{{ storage_class }}"
             source:
               blank: {}
-      when: dv_check.resources | length == 0
 
-    - name: Append new disk to VM definition
+    - name: Add extra disk to VM definition if not already present
       set_fact:
-        updated_vm: >-
+        final_vm_def: >-
           {{
-            vm_info.resources[0] |
-            combine({
-              'spec': vm_info.resources[0].spec |
-              combine({
-                'template': vm_info.resources[0].spec.template |
-                combine({
-                  'spec': vm_info.resources[0].spec.template.spec |
+            (existing_vm.resources[0] if existing_vm.resources else base_vm_def)
+            | combine({
+                'metadata': {
+                  'resourceVersion': existing_vm.resources[0].metadata.resourceVersion if existing_vm.resources else None
+                },
+                'spec': {
+                  'running': false,
+                  'template': base_vm_def.spec.template |
                   combine({
-                    'domain': vm_info.resources[0].spec.template.spec.domain |
+                    'spec': base_vm_def.spec.template.spec |
                     combine({
-                      'devices': {
-                        'disks': vm_info.resources[0].spec.template.spec.domain.devices.disks
-                                 + [ {
-                                     'name': disk_name,
-                                     'disk': { 'bus': bus }
-                                   } ]
-                      }
-                    }),
-                    'volumes': vm_info.resources[0].spec.template.spec.volumes
-                               + [ {
-                                   'name': disk_name,
-                                   'dataVolume': { 'name': disk_name }
-                                 } ]
+                      'domain': base_vm_def.spec.template.spec.domain |
+                      combine({
+                        'devices': {
+                          'disks': (
+                            (
+                              existing_vm.resources[0].spec.template.spec.domain.devices.disks
+                              if existing_vm.resources
+                              else base_vm_def.spec.template.spec.domain.devices.disks
+                            )
+                            + [
+                              {
+                                'name': disk_name,
+                                'disk': { 'bus': bus }
+                              }
+                            ]
+                            if existing_vm.resources | length == 0
+                            or (disk_name not in [d.name for d in existing_vm.resources[0].spec.template.spec.domain.devices.disks])
+                            else existing_vm.resources[0].spec.template.spec.domain.devices.disks
+                          )
+                        }
+                      }),
+                      'volumes': (
+                        (
+                          existing_vm.resources[0].spec.template.spec.volumes
+                          if existing_vm.resources
+                          else base_vm_def.spec.template.spec.volumes
+                        )
+                        + [
+                          {
+                            'name': disk_name,
+                            'dataVolume': { 'name': disk_name }
+                          }
+                        ]
+                        if existing_vm.resources | length == 0
+                        or (disk_name not in [v.name for v in existing_vm.resources[0].spec.template.spec.volumes])
+                        else existing_vm.resources[0].spec.template.spec.volumes
+                      )
+                    })
                   })
-                })
-              })
-            }, recursive=True)
+                }
+              }, recursive=True)
           }}
 
-    - name: Preserve metadata.resourceVersion in updated VM
-      set_fact:
-        updated_vm: "{{ updated_vm | combine({'metadata': {'resourceVersion': vm_info.resources[0].metadata.resourceVersion}}, recursive=True) }}"
-
-    - name: Apply updated VM definition with extra disk
+    - name: Apply updated VM definition
       k8s:
         state: present
-        definition: "{{ updated_vm }}"
+        definition: "{{ final_vm_def }}"
 
     - name: Start the VM
       k8s:
