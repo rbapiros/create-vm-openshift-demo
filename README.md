@@ -27,13 +27,15 @@ The playbook is designed to be **idempotent** — you can run it multiple times,
 
 ## Usage
 
-1. Ensure you have access to your OpenShift cluster (eg. oc login ... )
-2. Install the requirements:
+1. Ensure you have access to your OpenShift cluster
+   ```bash
+   oc login ...
+3. Install the requirements:
    ```bash
    ansible-galaxy collection install kubernetes.core
    sudo dnf install ansible-core python3
    python3 -m ensurepip
    python3 -m pip install kubernetes
-3. Run the playbook:
+4. Run the playbook:
    ```bash
    ansible-playbook all-in-one.yml
