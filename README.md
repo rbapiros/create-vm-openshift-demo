@@ -34,4 +34,6 @@ The playbook is designed to be **idempotent** — you can run it multiple times,
    sudo dnf install ansible-core python3
    python3 -m ensurepip
    python3 -m pip install kubernetes
-3. ansible-playbook all-in-one.yml
+3. Run the playbook:
+   ```bash
+   ansible-playbook all-in-one.yml
