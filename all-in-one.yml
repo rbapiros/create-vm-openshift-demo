@@ -202,7 +202,8 @@
       register: refreshed_vm
       failed_when: false
 
-    - name: Update resourceVersion in final_vm_def
+    - name: Update resourceVersion in final_vm_def (only if VM exists)
+      when: refreshed_vm.resources | length > 0
       set_fact:
         final_vm_def: "{{ final_vm_def | combine({'metadata': {'resourceVersion': refreshed_vm.resources[0].metadata.resourceVersion}}, recursive=True) }}"
 
