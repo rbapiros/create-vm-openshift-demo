@@ -4,16 +4,17 @@ This repository contains an Ansible playbook to **create or update** a Virtual M
 
 ---
 
-## Main Playbook
+## Main Playbooks
 
-- The main playbook file is [`all-in-one.yml`](./all-in-one.yml).
-- This playbook handles:
+- The main playbook files are create_vm.yml and update_vm_resources_and_add_disk.yml
+- create_vm.yml handles:
   - Creating a VM with specified CPU, memory, and disk settings.
+- update_vm_resources_and_add_disk.yml handles:
   - Adding an extra DataVolume disk if it doesn’t already exist.
   - Updating the VM’s CPU and memory configuration safely.
-  - Managing VM lifecycle (stopping before updates, restarting after).
+- all-in-one.yml does all of the above, in a single playbook.
 
-The playbook is designed to be **idempotent** — you can run it multiple times, adjusting the variables (e.g., CPU cores, RAM size), and it will update the existing VM accordingly without creating duplicates or conflicts.
+The playbooks are designed to be **idempotent** — you can run it multiple times, adjusting the variables (e.g., CPU cores, RAM size), and it will update the existing VM accordingly without creating duplicates or conflicts.
 
 ---
 
