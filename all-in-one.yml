@@ -9,8 +9,8 @@
     namespace: linux-vm
     vm_name: fedora-vm
     image_url: "quay.io/containerdisks/fedora:latest"
-    memory: "4Gi"
-    cpu_cores: 4
+    memory: "2Gi"
+    cpu_cores: 2
 
     disk_name: extra-disk
     disk_size: 10Gi
@@ -146,66 +146,52 @@
             if existing_vm.resources | length > 0 else []
           }}
 
-    - name: Add extra disk and volume if not already present
+    - name: Build updated disk list
       set_fact:
-        final_vm_def: >-
+        final_disks: >-
           {{
-            (existing_vm.resources[0] if existing_vm.resources else base_vm_def)
-            | combine({
-                'metadata': {
-                  'resourceVersion': (
-                    existing_vm.resources[0].metadata.resourceVersion
-                    if existing_vm.resources else None
-                  )
-                },
-                'spec': {
-                  'running': false,
-                  'template': base_vm_def.spec.template
-                  | combine({
-                      'spec': base_vm_def.spec.template.spec
-                      | combine({
-                          'domain': base_vm_def.spec.template.spec.domain
-                          | combine({
-                              'cpu': { 'cores': cpu_cores },
-                              'resources': { 'requests': { 'memory': memory }},
-                              'devices': {
-                                'disks': (
-                                  (
-                                    existing_vm.resources[0].spec.template.spec.domain.devices.disks
-                                    if existing_vm.resources else base_vm_def.spec.template.spec.domain.devices.disks
-                                  )
-                                  + [{
-                                    'name': disk_name,
-                                    'disk': { 'bus': bus }
-                                  }]
-                                  if disk_name not in existing_disk_names else
-                                  (
-                                    existing_vm.resources[0].spec.template.spec.domain.devices.disks
-                                    if existing_vm.resources else base_vm_def.spec.template.spec.domain.devices.disks
-                                  )
-                                )
-                              }
-                          }),
-                          'volumes': (
-                            (
-                              existing_vm.resources[0].spec.template.spec.volumes
-                              if existing_vm.resources else base_vm_def.spec.template.spec.volumes
-                            )
-                            + [{
-                              'name': disk_name,
-                              'dataVolume': { 'name': disk_name }
-                            }]
-                            if disk_name not in existing_volume_names else
-                            (
-                              existing_vm.resources[0].spec.template.spec.volumes
-                              if existing_vm.resources else base_vm_def.spec.template.spec.volumes
-                            )
-                          )
-                      })
-                  })
-                }
-              }, recursive=True)
+            (existing_vm.resources[0].spec.template.spec.domain.devices.disks
+             if existing_vm.resources else base_vm_def.spec.template.spec.domain.devices.disks)
+            + ([{ 'name': disk_name, 'disk': { 'bus': bus } }]
+               if disk_name not in existing_disk_names else [])
           }}
+
+    - name: Build updated volume list
+      set_fact:
+        final_volumes: >-
+          {{
+            (existing_vm.resources[0].spec.template.spec.volumes
+             if existing_vm.resources else base_vm_def.spec.template.spec.volumes)
+            + ([{ 'name': disk_name, 'dataVolume': { 'name': disk_name } }]
+               if disk_name not in existing_volume_names else [])
+          }}
+
+    - name: Build final VM definition
+      set_fact:
+        final_vm_def:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: "{{ vm_name }}"
+            namespace: "{{ namespace }}"
+            resourceVersion: "{{ existing_vm.resources[0].metadata.resourceVersion if existing_vm.resources else None }}"
+          spec:
+            running: false
+            template:
+              metadata:
+                labels:
+                  kubevirt.io/domain: "{{ vm_name }}"
+              spec:
+                evictionStrategy: None
+                domain:
+                  cpu:
+                    cores: "{{ cpu_cores }}"
+                  resources:
+                    requests:
+                      memory: "{{ memory }}"
+                  devices:
+                    disks: "{{ final_disks }}"
+                volumes: "{{ final_volumes }}"
 
     - name: Re-fetch latest VM definition to avoid resourceVersion conflict
       k8s_info:
@@ -220,7 +206,6 @@
       set_fact:
         final_vm_def: "{{ final_vm_def | combine({'metadata': {'resourceVersion': refreshed_vm.resources[0].metadata.resourceVersion}}, recursive=True) }}"
 
-    
     - name: Apply updated VM definition
       k8s:
         state: present
