@@ -32,8 +32,8 @@ The playbook is designed to be **idempotent** — you can run it multiple times,
    oc login ...
 3. Install the requirements:
    ```bash
-   ansible-galaxy collection install kubernetes.core
    sudo dnf install ansible-core python3
+   ansible-galaxy collection install kubernetes.core
    python3 -m ensurepip
    python3 -m pip install kubernetes
 4. Run the playbook:
