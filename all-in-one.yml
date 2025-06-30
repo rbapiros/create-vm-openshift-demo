@@ -1,0 +1,179 @@
+---
+- name: Create Fedora VM and attach an extra disk on OpenShift Virtualization
+  hosts: localhost
+  gather_facts: no
+  collections:
+    - kubernetes.core
+
+  vars:
+    namespace: linux-vm
+    vm_name: fedora-vm
+    image_url: "quay.io/containerdisks/fedora:latest"
+    memory: "2Gi"
+    cpu_cores: 2
+
+    disk_name: extra-disk
+    disk_size: 10Gi
+    storage_class: ocs-storagecluster-ceph-rbd-virtualization
+    bus: virtio
+    access_mode: ReadWriteOnce
+    volume_mode: Filesystem
+
+  tasks:
+
+    - name: Deploy Linux VM in existing namespace
+      k8s:
+        state: present
+        definition:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: "{{ vm_name }}"
+            namespace: "{{ namespace }}"
+          spec:
+            running: true
+            template:
+              metadata:
+                labels:
+                  kubevirt.io/domain: "{{ vm_name }}"
+              spec:
+                evictionStrategy: None
+                domain:
+                  cpu:
+                    cores: "{{ cpu_cores }}"
+                  devices:
+                    disks:
+                      - name: containerdisk
+                        disk:
+                          bus: virtio
+                      - name: cloudinitdisk
+                        disk:
+                          bus: virtio
+                  resources:
+                    requests:
+                      memory: "{{ memory }}"
+                volumes:
+                  - name: containerdisk
+                    containerDisk:
+                      image: "{{ image_url }}"
+                  - name: cloudinitdisk
+                    cloudInitNoCloud:
+                      userData: |
+                        #cloud-config
+                        user: fedora
+                        password: fedora
+                        chpasswd: { expire: False }
+                        ssh_pwauth: True
+
+    - name: Stop the VM before modifying disks
+      k8s:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ namespace }}"
+        definition:
+          spec:
+            running: false
+
+    - name: Wait for VM to fully stop
+      k8s_info:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstance
+        namespace: "{{ namespace }}"
+        name: "{{ vm_name }}"
+      register: vmi_info
+      until: vmi_info.resources | length == 0
+      retries: 10
+      delay: 5
+      ignore_errors: true
+
+    - name: Get current VM definition
+      k8s_info:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ namespace }}"
+      register: vm_info
+
+    - name: Check if DataVolume exists
+      k8s_info:
+        api_version: cdi.kubevirt.io/v1beta1
+        kind: DataVolume
+        name: "{{ disk_name }}"
+        namespace: "{{ namespace }}"
+      register: dv_check
+      failed_when: false
+
+    - name: Create new DataVolume if not present
+      k8s:
+        state: present
+        definition:
+          apiVersion: cdi.kubevirt.io/v1beta1
+          kind: DataVolume
+          metadata:
+            name: "{{ disk_name }}"
+            namespace: "{{ namespace }}"
+          spec:
+            pvc:
+              accessModes:
+                - "{{ access_mode }}"
+              resources:
+                requests:
+                  storage: "{{ disk_size }}"
+              volumeMode: "{{ volume_mode }}"
+              storageClassName: "{{ storage_class }}"
+            source:
+              blank: {}
+      when: dv_check.resources | length == 0
+
+    - name: Append new disk to VM definition
+      set_fact:
+        updated_vm: >-
+          {{
+            vm_info.resources[0] |
+            combine({
+              'spec': vm_info.resources[0].spec |
+              combine({
+                'template': vm_info.resources[0].spec.template |
+                combine({
+                  'spec': vm_info.resources[0].spec.template.spec |
+                  combine({
+                    'domain': vm_info.resources[0].spec.template.spec.domain |
+                    combine({
+                      'devices': {
+                        'disks': vm_info.resources[0].spec.template.spec.domain.devices.disks
+                                 + [ {
+                                     'name': disk_name,
+                                     'disk': { 'bus': bus }
+                                   } ]
+                      }
+                    }),
+                    'volumes': vm_info.resources[0].spec.template.spec.volumes
+                               + [ {
+                                   'name': disk_name,
+                                   'dataVolume': { 'name': disk_name }
+                                 } ]
+                  })
+                })
+              })
+            }, recursive=True)
+          }}
+
+    - name: Preserve metadata.resourceVersion in updated VM
+      set_fact:
+        updated_vm: "{{ updated_vm | combine({'metadata': {'resourceVersion': vm_info.resources[0].metadata.resourceVersion}}, recursive=True) }}"
+
+    - name: Apply updated VM definition with extra disk
+      k8s:
+        state: present
+        definition: "{{ updated_vm }}"
+
+    - name: Start the VM
+      k8s:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ namespace }}"
+        definition:
+          spec:
+            running: true
