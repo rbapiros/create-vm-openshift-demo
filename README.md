@@ -40,4 +40,6 @@ The playbooks are designed to be **idempotent** — you can run it multiple time
 3. Clone the repository
 4. Run the playbook:
    ```bash
-   ansible-playbook all-in-one.yml
+   ansible-playbook create_vm.yml
+   ansible-playbook update_vm_resources_and_add_disk.yml
+   
