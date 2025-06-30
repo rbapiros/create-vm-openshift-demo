@@ -1,0 +1,70 @@
+---
+- name: Create Fedora VM on OpenShift Virtualization
+  hosts: localhost
+  gather_facts: no
+  collections:
+    - kubernetes.core  # Use the kubernetes.core collection for Kubernetes modules
+
+  vars:
+    namespace: linux-vm
+    vm_name: fedora-vm
+    image_url: "quay.io/containerdisks/fedora:latest"
+    memory: "2Gi"
+    cpu_cores: 2
+
+  tasks:
+    # Try to retrieve the VM if it already exists.
+    # This determines whether the playbook will skip creation.
+    - name: Check if the VM already exists
+      k8s_info:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ namespace }}"
+      register: existing_vm
+      failed_when: false  # It’s okay if the VM isn’t found
+
+    # Define and create the VM only if it does not exist already.
+    - name: Create Fedora VM if it doesn't exist
+      when: existing_vm.resources | length == 0
+      k8s:
+        state: present
+        definition:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: "{{ vm_name }}"
+            namespace: "{{ namespace }}"
+          spec:
+            running: true  # The VM should be running right after creation
+            template:
+              metadata:
+                labels:
+                  kubevirt.io/domain: "{{ vm_name }}"  # Label for the VM domain, used by KubeVirt
+              spec:
+                evictionStrategy: None  # Prevent VM eviction under node pressure
+                domain:
+                  cpu:
+                    cores: "{{ cpu_cores }}"  # Number of CPU cores assigned
+                  resources:
+                    requests:
+                      memory: "{{ memory }}"  # Amount of RAM assigned
+                  devices:
+                    disks:
+                      - name: containerdisk
+                        disk: { bus: virtio }  # Disk bus type for root container disk
+                      - name: cloudinitdisk
+                        disk: { bus: virtio }  # Disk bus type for cloud-init data disk
+                volumes:
+                  - name: containerdisk
+                    containerDisk:
+                      image: "{{ image_url }}"  # OS image to use for the VM
+                  - name: cloudinitdisk
+                    cloudInitNoCloud:
+                      userData: |
+                        #cloud-config
+                        user: fedora
+                        password: fedora
+                        chpasswd: { expire: False }
+                        ssh_pwauth: True
+                        # Cloud-init config to set user and password for VM
