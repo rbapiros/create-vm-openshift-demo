@@ -1,0 +1,176 @@
+---
+- name: Update Fedora VM resources and attach extra disk
+  hosts: localhost
+  gather_facts: no
+  collections:
+    - kubernetes.core  # Use the kubernetes.core collection for Kubernetes modules
+
+  vars:
+    namespace: linux-vm
+    vm_name: fedora-vm
+    memory: "4Gi"  # Updated memory value
+    cpu_cores: 4   # Updated CPU core count
+
+    disk_name: extra-disk
+    disk_size: 10Gi
+    storage_class: ocs-storagecluster-ceph-rbd-virtualization
+    bus: virtio
+    access_mode: ReadWriteOnce
+    volume_mode: Filesystem
+
+  tasks:
+    # Retrieve the existing VM so we can update it
+    - name: Get current VM definition
+      k8s_info:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ namespace }}"
+      register: existing_vm
+
+    # When modifying CPU, RAM, or disk configuration, the VM must be stopped.
+    - name: Stop the VM before modifying
+      when: existing_vm.resources | length > 0
+      k8s:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ namespace }}"
+        definition:
+          spec:
+            running: false  # Set running to false to stop the VM safely
+
+    # VM may not stop instantly; this loop ensures the VMI is fully gone before continuing.
+    - name: Wait for VM to fully stop
+      when: existing_vm.resources | length > 0
+      k8s_info:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachineInstance
+        name: "{{ vm_name }}"
+        namespace: "{{ namespace }}"
+      register: vmi_info
+      until: vmi_info.resources | length == 0
+      retries: 10
+      delay: 5
+      ignore_errors: true
+
+    # Check if the extra disk's DataVolume already exists.
+    - name: Check if DataVolume exists
+      k8s_info:
+        api_version: cdi.kubevirt.io/v1beta1
+        kind: DataVolume
+        name: "{{ disk_name }}"
+        namespace: "{{ namespace }}"
+      register: dv_check
+      failed_when: false
+
+    # Create a blank disk (DataVolume) for attaching as an additional virtual disk.
+    - name: Create new DataVolume if not present
+      when: dv_check.resources | length == 0
+      k8s:
+        state: present
+        definition:
+          apiVersion: cdi.kubevirt.io/v1beta1
+          kind: DataVolume
+          metadata:
+            name: "{{ disk_name }}"
+            namespace: "{{ namespace }}"
+          spec:
+            pvc:
+              accessModes: ["{{ access_mode }}"]
+              resources:
+                requests:
+                  storage: "{{ disk_size }}"
+              volumeMode: "{{ volume_mode }}"
+              storageClassName: "{{ storage_class }}"
+            source:
+              blank: {}
+
+    # Collect disk names from the current VM definition to detect whether the extra disk is already present.
+    - name: Get list of existing disk and volume names
+      set_fact:
+        existing_disks: "{{ existing_vm.resources[0].spec.template.spec.domain.devices.disks }}"
+        existing_volumes: "{{ existing_vm.resources[0].spec.template.spec.volumes }}"
+
+    # Build updated disk and volume lists including the new disk if not already present.
+    - name: Build updated disk and volume lists
+      set_fact:
+        updated_disks: >-
+          {{
+            existing_disks + [ { 'name': disk_name, 'disk': { 'bus': bus } } ]
+            if disk_name not in (existing_disks | map(attribute='name') | list)
+            else existing_disks
+          }}
+        updated_volumes: >-
+          {{
+            existing_volumes + [ { 'name': disk_name, 'dataVolume': { 'name': disk_name } } ]
+            if disk_name not in (existing_volumes | map(attribute='name') | list)
+            else existing_volumes
+          }}
+
+    # Construct the full updated VM spec.
+    # This definition includes updated memory, CPU, disk, volume, and resourceVersion.
+    - name: Build final updated VM definition
+      set_fact:
+        updated_vm_def:
+          apiVersion: kubevirt.io/v1
+          kind: VirtualMachine
+          metadata:
+            name: "{{ vm_name }}"
+            namespace: "{{ namespace }}"
+            resourceVersion: "{{ existing_vm.resources[0].metadata.resourceVersion }}"
+          spec:
+            running: false
+            template:
+              metadata:
+                labels:
+                  kubevirt.io/domain: "{{ vm_name }}"
+              spec:
+                evictionStrategy: None
+                domain:
+                  cpu:
+                    cores: "{{ cpu_cores }}"
+                  resources:
+                    requests:
+                      memory: "{{ memory }}"
+                  devices:
+                    disks: "{{ updated_disks }}"
+                volumes: "{{ updated_volumes }}"
+
+    # Re-fetch the latest VM info immediately before applying changes.
+    - name: Refresh VM resource version before applying
+      k8s_info:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ namespace }}"
+      register: refreshed_vm
+
+    # Overwrite the resourceVersion in our final spec with the freshest one.
+    - name: Update resourceVersion to latest
+      when: refreshed_vm.resources | length > 0
+      set_fact:
+        updated_vm_def: >-
+          {{
+            updated_vm_def
+            | combine({ 'metadata': {
+                'resourceVersion': refreshed_vm.resources[0].metadata.resourceVersion }
+              }, recursive=True)
+          }}
+
+    # Apply the final VM definition. This updates the VM's spec.
+    - name: Apply updated VM definition
+      k8s:
+        state: present
+        definition: "{{ updated_vm_def }}"
+
+    # Start the VM after changes have been applied.
+    - name: Start the VM
+      k8s:
+        api_version: kubevirt.io/v1
+        kind: VirtualMachine
+        name: "{{ vm_name }}"
+        namespace: "{{ namespace }}"
+        definition:
+          spec:
+            running: true
