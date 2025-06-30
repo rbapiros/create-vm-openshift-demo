@@ -1,6 +1,6 @@
-# Fedora VM Creation and Update Playbook Demo
+# VM Creation and Update Playbook Demo
 
-This repository contains an Ansible playbook to **create or update** a Fedora Virtual Machine (VM) on OpenShift Virtualization using KubeVirt.
+This repository contains an Ansible playbook to **create or update** a Virtual Machine (VM) on OpenShift Virtualization using KubeVirt.
 
 ---
 
@@ -8,7 +8,7 @@ This repository contains an Ansible playbook to **create or update** a Fedora Vi
 
 - The main playbook file is [`all-in-one.yml`](./all-in-one.yml).
 - This playbook handles:
-  - Creating a Fedora VM with specified CPU, memory, and disk settings.
+  - Creating a VM with specified CPU, memory, and disk settings.
   - Adding an extra DataVolume disk if it doesn’t already exist.
   - Updating the VM’s CPU and memory configuration safely.
   - Managing VM lifecycle (stopping before updates, restarting after).
