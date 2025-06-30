@@ -3,7 +3,7 @@
   hosts: localhost
   gather_facts: no
   collections:
-    - kubernetes.core
+    - kubernetes.core  # Use the kubernetes.core collection for Kubernetes modules
 
   vars:
     namespace: linux-vm
@@ -23,18 +23,20 @@
 
     # Try to retrieve the VM if it already exists.
     # This determines whether the playbook will update or create the VM.
-    - k8s_info:
+    - name: Check if the VM already exists
+      k8s_info:
         api_version: kubevirt.io/v1
         kind: VirtualMachine
         name: "{{ vm_name }}"
         namespace: "{{ namespace }}"
-      register: existing_vm
-      failed_when: false  # It’s okay if the VM isn’t found; we’ll create it.
+      register: existing_vm  # Save the result in 'existing_vm' variable for later use
+      failed_when: false  # It’s okay if the VM isn’t found; we’ll create it if missing
 
     # Define the full spec of a brand new VM from scratch.
     # This will be used either directly (if the VM doesn’t exist), or
     # as a base to modify when applying updates like CPU, RAM, disks.
-    - set_fact:
+    - name: Create base VM definition
+      set_fact:
         base_vm_def:
           apiVersion: kubevirt.io/v1
           kind: VirtualMachine
@@ -42,29 +44,29 @@
             name: "{{ vm_name }}"
             namespace: "{{ namespace }}"
           spec:
-            running: true  # Starts VM after creation
+            running: true  # The VM should be running right after creation
             template:
               metadata:
                 labels:
-                  kubevirt.io/domain: "{{ vm_name }}"
+                  kubevirt.io/domain: "{{ vm_name }}"  # Label for the VM domain, used by KubeVirt
               spec:
-                evictionStrategy: None  # Don't evict this VM under pressure
+                evictionStrategy: None  # Prevent VM eviction under node pressure
                 domain:
                   cpu:
-                    cores: "{{ cpu_cores }}"
+                    cores: "{{ cpu_cores }}"  # Number of CPU cores assigned
                   resources:
                     requests:
-                      memory: "{{ memory }}"
+                      memory: "{{ memory }}"  # Amount of RAM assigned
                   devices:
                     disks:
                       - name: containerdisk
-                        disk: { bus: virtio }
+                        disk: { bus: virtio }  # Disk bus type for root container disk
                       - name: cloudinitdisk
-                        disk: { bus: virtio }
+                        disk: { bus: virtio }  # Disk bus type for cloud-init data disk
                 volumes:
                   - name: containerdisk
                     containerDisk:
-                      image: "{{ image_url }}"
+                      image: "{{ image_url }}"  # OS image to use for the VM
                   - name: cloudinitdisk
                     cloudInitNoCloud:
                       userData: |
@@ -73,10 +75,12 @@
                         password: fedora
                         chpasswd: { expire: False }
                         ssh_pwauth: True
+                        # Cloud-init config to set user and password for VM
 
     # When modifying CPU, RAM, or disk configuration, the VM must be stopped.
     # This only runs if the VM is already created.
-    - when: existing_vm.resources | length > 0
+    - name: Stop the VM before modifying
+      when: existing_vm.resources | length > 0  # Only stop if VM exists
       k8s:
         api_version: kubevirt.io/v1
         kind: VirtualMachine
@@ -84,37 +88,40 @@
         namespace: "{{ namespace }}"
         definition:
           spec:
-            running: false
+            running: false  # Set running to false to stop the VM safely
 
     # VM may not stop instantly; this loop ensures the VMI is fully gone before continuing.
     # Without this wait, race conditions or API errors may occur when applying new specs.
-    - when: existing_vm.resources | length > 0
+    - name: Wait for VM to fully stop
+      when: existing_vm.resources | length > 0  # Only run if VM exists
       k8s_info:
         api_version: kubevirt.io/v1
         kind: VirtualMachineInstance
         namespace: "{{ namespace }}"
         name: "{{ vm_name }}"
       register: vmi_info
-      until: vmi_info.resources | length == 0
-      retries: 10
-      delay: 5
-      ignore_errors: true  # Avoid total failure if cleanup is delayed
+      until: vmi_info.resources | length == 0  # Wait until no VM instance is running
+      retries: 10  # Retry up to 10 times
+      delay: 5  # Wait 5 seconds between retries
+      ignore_errors: true  # Don't fail the playbook if this takes too long
 
     # Check if the extra disk's DataVolume already exists.
     # If it doesn't, we’ll create it in the next step.
-    - k8s_info:
+    - name: Check if DataVolume exists
+      k8s_info:
         api_version: cdi.kubevirt.io/v1beta1
         kind: DataVolume
         name: "{{ disk_name }}"
         namespace: "{{ namespace }}"
       register: dv_check
-      failed_when: false
+      failed_when: false  # It's okay if the DataVolume is not found (we'll create it)
 
     # Create a blank disk (DataVolume) for attaching as an additional virtual disk.
     # Only runs if the named disk doesn’t already exist in the namespace.
-    - when: dv_check.resources | length == 0
+    - name: Create new DataVolume if not present
+      when: dv_check.resources | length == 0  # Create only if it doesn't already exist
       k8s:
-        state: present
+        state: present  # Ensure the DataVolume exists (create if missing)
         definition:
           apiVersion: cdi.kubevirt.io/v1beta1
           kind: DataVolume
@@ -123,18 +130,19 @@
             namespace: "{{ namespace }}"
           spec:
             pvc:
-              accessModes: ["{{ access_mode }}"]
+              accessModes: ["{{ access_mode }}"]  # How the volume can be accessed (read/write)
               resources:
                 requests:
-                  storage: "{{ disk_size }}"
-              volumeMode: "{{ volume_mode }}"
-              storageClassName: "{{ storage_class }}"
+                  storage: "{{ disk_size }}"  # Size of the disk requested
+              volumeMode: "{{ volume_mode }}"  # Filesystem volume type
+              storageClassName: "{{ storage_class }}"  # Storage backend to use
             source:
-              blank: {}
+              blank: {}  # Create an empty disk, no data
 
     # Collect disk names from the current VM definition to detect whether the extra disk is already present.
     # This prevents duplicate entries when re-running the playbook.
-    - set_fact:
+    - name: Get list of existing disk names
+      set_fact:
         existing_disk_names: >-
           {{
             existing_vm.resources[0].spec.template.spec.domain.devices.disks
@@ -144,7 +152,8 @@
 
     # Same idea as above, but for volumes instead of disks.
     # Used to make volume addition idempotent.
-    - set_fact:
+    - name: Get list of existing volume names
+      set_fact:
         existing_volume_names: >-
           {{
             existing_vm.resources[0].spec.template.spec.volumes
@@ -154,7 +163,8 @@
 
     # Add the extra disk only if it's not already in the VM definition.
     # Ensures re-runs don’t break or duplicate definitions.
-    - set_fact:
+    - name: Build updated disk list
+      set_fact:
         final_disks: >-
           {{
             (existing_vm.resources[0].spec.template.spec.domain.devices.disks
@@ -164,7 +174,8 @@
           }}
 
     # Same logic as final_disks, but applies to volumes (which connect disks to DataVolumes).
-    - set_fact:
+    - name: Build updated volume list
+      set_fact:
         final_volumes: >-
           {{
             (existing_vm.resources[0].spec.template.spec.volumes
@@ -176,7 +187,8 @@
     # Construct the full updated VM spec.
     # Includes memory, CPU, updated disk/volume lists, and the current resourceVersion.
     # This definition is eventually used in the patch request.
-    - set_fact:
+    - name: Build final VM definition
+      set_fact:
         final_vm_def:
           apiVersion: kubevirt.io/v1
           kind: VirtualMachine
@@ -187,7 +199,7 @@
             # If it's wrong or stale, the update will fail with a 409 Conflict.
             resourceVersion: "{{ existing_vm.resources[0].metadata.resourceVersion if existing_vm.resources else None }}"
           spec:
-            running: false
+            running: false  # VM should remain stopped while applying config
             template:
               metadata:
                 labels:
@@ -201,12 +213,16 @@
                     requests:
                       memory: "{{ memory }}"
                   devices:
-                    disks: "{{ final_disks }}"
-                volumes: "{{ final_volumes }}"
+                    disks: "{{ final_disks }}"  # Use updated disks list
+                volumes: "{{ final_volumes }}"  # Use updated volumes list
 
     # Re-fetch the latest VM info immediately before applying changes.
     # This is crucial because the previous resourceVersion may now be outdated (if another process/operator made changes).
-    - k8s_info:
+    # This means that the VirtualMachine resource was modified by something else (another process/operator)
+    # after you fetched its definition and before you applied your changes.
+    # Kubernetes will reject your update if the resourceVersion is stale to avoid overwriting concurrent changes.
+    - name: Refresh VM resource version before applying
+      k8s_info:
         api_version: kubevirt.io/v1
         kind: VirtualMachine
         name: "{{ vm_name }}"
@@ -216,7 +232,8 @@
 
     # If the VM exists, overwrite the resourceVersion in our final spec with the freshest one.
     # This prevents update rejection from Kubernetes ("object has been modified").
-    - when: refreshed_vm.resources | length > 0
+    - name: Update resourceVersion to latest
+      when: refreshed_vm.resources | length > 0
       set_fact:
         final_vm_def: >-
           {{
@@ -230,13 +247,15 @@
 
     # Apply the final VM definition. This updates or creates the VM.
     # By this point, we’ve ensured no duplicates and the correct resource version.
-    - k8s:
-        state: present
+    - name: Apply VM definition (create or update)
+      k8s:
+        state: present  # Ensure the resource exists with this spec
         definition: "{{ final_vm_def }}"
 
     # Start the VM after the new spec has been applied.
     # It was previously stopped to safely modify domain settings like CPU/memory.
-    - k8s:
+    - name: Start the VM
+      k8s:
         api_version: kubevirt.io/v1
         kind: VirtualMachine
         name: "{{ vm_name }}"
