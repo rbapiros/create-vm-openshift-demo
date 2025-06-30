@@ -20,6 +20,7 @@
     volume_mode: Filesystem
 
   tasks:
+
     - name: Check if the VM already exists
       k8s_info:
         api_version: kubevirt.io/v1
@@ -127,59 +128,80 @@
             source:
               blank: {}
 
-    - name: Add extra disk to VM definition if not already present
+    - name: Get list of existing disk names
+      set_fact:
+        existing_disk_names: >-
+          {{
+            existing_vm.resources[0].spec.template.spec.domain.devices.disks
+            | map(attribute='name') | list
+            if existing_vm.resources | length > 0 else []
+          }}
+
+    - name: Get list of existing volume names
+      set_fact:
+        existing_volume_names: >-
+          {{
+            existing_vm.resources[0].spec.template.spec.volumes
+            | map(attribute='name') | list
+            if existing_vm.resources | length > 0 else []
+          }}
+
+    - name: Add extra disk and volume if not already present
       set_fact:
         final_vm_def: >-
           {{
             (existing_vm.resources[0] if existing_vm.resources else base_vm_def)
             | combine({
                 'metadata': {
-                  'resourceVersion': existing_vm.resources[0].metadata.resourceVersion if existing_vm.resources else None
+                  'resourceVersion': (
+                    existing_vm.resources[0].metadata.resourceVersion
+                    if existing_vm.resources else None
+                  )
                 },
                 'spec': {
                   'running': false,
-                  'template': base_vm_def.spec.template |
-                  combine({
-                    'spec': base_vm_def.spec.template.spec |
-                    combine({
-                      'domain': base_vm_def.spec.template.spec.domain |
-                      combine({
-                        'devices': {
-                          'disks': (
-                            (
-                              existing_vm.resources[0].spec.template.spec.domain.devices.disks
-                              if existing_vm.resources
-                              else base_vm_def.spec.template.spec.domain.devices.disks
-                            )
-                            + [
-                              {
-                                'name': disk_name,
-                                'disk': { 'bus': bus }
+                  'template': base_vm_def.spec.template
+                  | combine({
+                      'spec': base_vm_def.spec.template.spec
+                      | combine({
+                          'domain': base_vm_def.spec.template.spec.domain
+                          | combine({
+                              'cpu': { 'cores': cpu_cores },
+                              'resources': { 'requests': { 'memory': memory }},
+                              'devices': {
+                                'disks': (
+                                  (
+                                    existing_vm.resources[0].spec.template.spec.domain.devices.disks
+                                    if existing_vm.resources else base_vm_def.spec.template.spec.domain.devices.disks
+                                  )
+                                  + [{
+                                    'name': disk_name,
+                                    'disk': { 'bus': bus }
+                                  }]
+                                  if disk_name not in existing_disk_names else
+                                  (
+                                    existing_vm.resources[0].spec.template.spec.domain.devices.disks
+                                    if existing_vm.resources else base_vm_def.spec.template.spec.domain.devices.disks
+                                  )
+                                )
                               }
-                            ]
-                            if existing_vm.resources | length == 0
-                            or (disk_name not in [d.name for d in existing_vm.resources[0].spec.template.spec.domain.devices.disks])
-                            else existing_vm.resources[0].spec.template.spec.domain.devices.disks
+                          }),
+                          'volumes': (
+                            (
+                              existing_vm.resources[0].spec.template.spec.volumes
+                              if existing_vm.resources else base_vm_def.spec.template.spec.volumes
+                            )
+                            + [{
+                              'name': disk_name,
+                              'dataVolume': { 'name': disk_name }
+                            }]
+                            if disk_name not in existing_volume_names else
+                            (
+                              existing_vm.resources[0].spec.template.spec.volumes
+                              if existing_vm.resources else base_vm_def.spec.template.spec.volumes
+                            )
                           )
-                        }
-                      }),
-                      'volumes': (
-                        (
-                          existing_vm.resources[0].spec.template.spec.volumes
-                          if existing_vm.resources
-                          else base_vm_def.spec.template.spec.volumes
-                        )
-                        + [
-                          {
-                            'name': disk_name,
-                            'dataVolume': { 'name': disk_name }
-                          }
-                        ]
-                        if existing_vm.resources | length == 0
-                        or (disk_name not in [v.name for v in existing_vm.resources[0].spec.template.spec.volumes])
-                        else existing_vm.resources[0].spec.template.spec.volumes
-                      )
-                    })
+                      })
                   })
                 }
               }, recursive=True)
