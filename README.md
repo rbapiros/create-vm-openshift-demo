@@ -36,6 +36,7 @@ The playbook is designed to be **idempotent** — you can run it multiple times,
    ansible-galaxy collection install kubernetes.core
    python3 -m ensurepip
    python3 -m pip install kubernetes
+3. Clone the repository
 4. Run the playbook:
    ```bash
    ansible-playbook all-in-one.yml
