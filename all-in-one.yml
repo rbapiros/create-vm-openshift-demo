@@ -20,7 +20,6 @@
     volume_mode: Filesystem
 
   tasks:
-
     # Try to retrieve the VM if it already exists.
     # This determines whether the playbook will update or create the VM.
     - name: Check if the VM already exists
